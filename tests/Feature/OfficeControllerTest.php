@@ -125,4 +125,34 @@ class OfficeControllerTest extends TestCase
         $response->assertOk();
         $this->assertEquals(1, $response->json('data')[0]['reservations_count']);
     }
+
+    /**
+     * @test
+     */
+    public function itOrdersByDistanceWhenCoordinatesAreProvided()
+    {
+        $office1 = Office::factory()->create([
+            'lat' => '47.2408955117935',
+            'lng' => '38.90320203245686',
+            'title' => 'Taganrog'
+        ]);
+
+        $office2 = Office::factory()->create([
+            'lat' => '44.61749103372212',
+            'lng' => '33.505314866001896',
+            'title' => 'Sevastopol'
+        ]);
+
+        $response = $this->get('/api/offices?lat=38.720661384644046&lng=-9.16044783453807');
+
+        $response->assertOk();
+        $this->assertEquals('Sevastopol', $response->json('data')[0]['title']);
+        $this->assertEquals('Taganrog', $response->json('data')[1]['title']);
+
+        $response = $this->get('/api/offices');
+
+        $response->assertOk();
+        $this->assertEquals('Taganrog', $response->json('data')[0]['title']);
+        $this->assertEquals('Sevastopol', $response->json('data')[1]['title']);
+    }
 }
