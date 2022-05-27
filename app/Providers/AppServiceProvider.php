@@ -2,7 +2,10 @@
 
 namespace App\Providers;
 
+use App\Models\Office;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -22,8 +25,13 @@ class AppServiceProvider extends ServiceProvider
      *
      * @return void
      */
-    public function boot()
+    public function boot(): void
     {
         Model::unguard();
+
+        Relation::morphMap([
+            'office' => Office::class,
+            'user' => User::class,
+        ]);
     }
 }

@@ -2,12 +2,12 @@
 
 namespace Tests\Feature;
 
-use App\Models\Image;
 use App\Models\Office;
 use App\Models\Reservation;
 use App\Models\Tag;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Response;
 use Tests\TestCase;
 
 class OfficeControllerTest extends TestCase
@@ -57,7 +57,7 @@ class OfficeControllerTest extends TestCase
         $office = Office::factory()->for($host)->create();
 
         $response = $this->get(
-            '/api/offices?host_id='.$host->id
+            '/api/offices?user_id='.$host->id
         );
 
         $response->assertOk();
@@ -79,7 +79,7 @@ class OfficeControllerTest extends TestCase
         Reservation::factory()->for($office)->for($user)->create();
 
         $response = $this->get(
-            '/api/offices?user_id='.$user->id
+            '/api/offices?visitor_id='.$user->id
         );
 
         $response->assertOk();
@@ -90,7 +90,7 @@ class OfficeControllerTest extends TestCase
     /**
      * @test
      */
-    public function itIncludesImagesTagsAndUser()
+    public function itIncludesImagesTagsAndUser(): void
     {
         $user = User::factory()->create();
         $tag = Tag::factory()->create();
@@ -113,9 +113,14 @@ class OfficeControllerTest extends TestCase
     /**
      * @test
      */
-    public function itReturnsTheNumberOfActiveReservations()
+    public function itReturnsTheNumberOfActiveReservations(): void
     {
-        $office = Office::factory()->create();
+        $user = User::factory()->create();
+        $tag = Tag::factory()->create();
+        $office = Office::factory()->for($user)->create();
+
+        $office->tags()->attach($tag);
+        $office->images()->create(['path' => 'image.jpg']);
 
         Reservation::factory()->for($office)->create(['status' => Reservation::STATUS_ACTIVE]);
         Reservation::factory()->for($office)->create(['status' => Reservation::STATUS_CANCELLED]);
@@ -154,5 +159,132 @@ class OfficeControllerTest extends TestCase
         $response->assertOk();
         $this->assertEquals('Taganrog', $response->json('data')[0]['title']);
         $this->assertEquals('Sevastopol', $response->json('data')[1]['title']);
+    }
+
+    /**
+     * @test
+     */
+    public function inShowsTheOffice(): void
+    {
+        $user = User::factory()->create();
+        $tag = Tag::factory()->create();
+        $office = Office::factory()->for($user)->create();
+
+        $office->tags()->attach($tag);
+        $office->images()->create(['path' => 'image.jpg']);
+
+        Reservation::factory()->for($office)->create(['status' => Reservation::STATUS_ACTIVE]);
+        Reservation::factory()->for($office)->create(['status' => Reservation::STATUS_CANCELLED]);
+
+        $response = $this->get('/api/offices/'.$office->id);
+
+        $response->assertOk();
+        $this->assertEquals(1, $response->json('data')['reservations_count']);
+        $this->assertIsArray($response->json('data')['tags']);
+        $this->assertIsArray($response->json('data')['images']);
+        $this->assertCount(1, $response->json('data')['tags']);
+        $this->assertCount(1, $response->json('data')['images']);
+        $this->assertEquals($user->id, $response->json('data')['user']['id']);
+    }
+
+    /**
+     * @test
+     */
+    public function itCreatesAnOffice()
+    {
+        $user = User::factory()->createQuietly();
+        $tags = Tag::factory(2)->create();
+
+        $this->actingAs($user);
+
+        $response = $this->postJson('/api/offices', Office::factory()->raw([
+            'tags' => $tags->pluck('id')->toArray()
+        ]));
+
+        $response->assertCreated()
+            ->assertJsonPath('data.approval_status', Office::APPROVAL_PENDING)
+            ->assertJsonPath('data.user.id', $user->id);
+    }
+
+    /**
+     * @test
+     */
+    public function itDoesntAllowCreatingIfScopeIsNotProvided()
+    {
+        $user = User::factory()->createQuietly();
+
+        $token = $user->createToken('test', []);
+
+        $response = $this->postJson('/api/offices', [], [
+            'Authorization' => 'Bearer '.$token->plainTextToken
+        ]);
+
+        $response->assertStatus(403);
+    }
+
+    /**
+     * @test
+     */
+    public function itAllowCreatingIfScopeIsProvided()
+    {
+        $user = User::factory()->createQuietly();
+        $tags = Tag::factory(2)->create();
+
+        $token = $user->createToken('test', ['office.create']);
+
+        $response = $this->postJson('/api/offices',
+            Office::factory()->raw([
+                'tags' => $tags->pluck('id')->toArray()
+            ]),
+            [
+                'Authorization' => 'Bearer '.$token->plainTextToken
+            ]
+        );
+
+        $response->assertCreated();
+    }
+
+    /**
+     * @test
+     */
+    public function itUpdatesAnOffice()
+    {
+        $user = User::factory()->createQuietly();
+        $tags = Tag::factory(2)->create();
+        $office = Office::factory()->for($user)->create();
+
+        $office->tags()->attach($tags);
+
+        $this->actingAs($user);
+
+        $anotherTag = Tag::factory()->create();
+
+        $response = $this->putJson('/api/offices/'.$office->id, [
+            'title' => 'Amazing Office',
+            'tags' => [$tags[0]->id, $anotherTag->id]
+        ]);
+
+        $response->assertOk()
+            ->assertJsonCount(2, 'data.tags')
+            ->assertJsonPath('data.tags.1.id', $anotherTag->id)
+            ->assertJsonPath('data.title', 'Amazing Office');
+    }
+
+    /**
+     * @test
+     */
+    public function itDoesntUpdateOfficeThatDoesntBelongToUser()
+    {
+        $user = User::factory()->createQuietly();
+        $anotherUser = User::factory()->createQuietly();
+        $office = Office::factory()->for($anotherUser)->create();
+
+        $this->actingAs($user);
+
+        $response = $this->putJson('/api/offices/'.$office->id, [
+            'title' => 'Amazing Office'
+        ]);
+
+        $response->assertStatus(Response::HTTP_FORBIDDEN);
     }
 }

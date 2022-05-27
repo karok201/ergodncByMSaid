@@ -24,7 +24,6 @@ class CreateOfficesTable extends Migration
             $table->text('address_line2')->nullable();
             $table->tinyInteger('approval_status')->default(1);
             $table->boolean('hidden')->default(false);
-            $table->index('price_per_day');
             $table->integer('price_per_day');
             $table->integer('monthly_discount')->default(0);
             $table->timestamps();
