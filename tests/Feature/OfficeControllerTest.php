@@ -6,8 +6,10 @@ use App\Models\Office;
 use App\Models\Reservation;
 use App\Models\Tag;
 use App\Models\User;
+use App\Notifications\OfficePendingApproval;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Notification;
 use Tests\TestCase;
 
 class OfficeControllerTest extends TestCase
@@ -192,6 +194,10 @@ class OfficeControllerTest extends TestCase
      */
     public function itCreatesAnOffice()
     {
+        Notification::fake();
+
+        $admin = User::factory()->create(['is_admin' => true]);
+
         $user = User::factory()->createQuietly();
         $tags = Tag::factory(2)->create();
 
@@ -204,6 +210,8 @@ class OfficeControllerTest extends TestCase
         $response->assertCreated()
             ->assertJsonPath('data.approval_status', Office::APPROVAL_PENDING)
             ->assertJsonPath('data.user.id', $user->id);
+
+        Notification::assertSentTo($admin, OfficePendingApproval::class);
     }
 
     /**
@@ -249,7 +257,7 @@ class OfficeControllerTest extends TestCase
      */
     public function itUpdatesAnOffice()
     {
-        $user = User::factory()->createQuietly();
+        $user = User::factory()->create();
         $tags = Tag::factory(2)->create();
         $office = Office::factory()->for($user)->create();
 
@@ -286,5 +294,134 @@ class OfficeControllerTest extends TestCase
         ]);
 
         $response->assertStatus(Response::HTTP_FORBIDDEN);
+    }
+
+    /**
+     * @test
+     */
+    public function itMarksTheOfficeAsPendingIfDirty()
+    {
+        $admin = User::factory()->create(['is_admin' => true]);
+
+        Notification::fake();
+
+        $user = User::factory()->createQuietly();
+        $office = Office::factory()->for($user)->create();
+
+        $this->actingAs($user);
+
+        $response = $this->putJson('/api/offices/'.$office->id, [
+            'lat' => '47.2408955117935',
+            'lng' => '38.90320203245686',
+        ]);
+
+        $response->assertOk();
+
+        $this->assertDatabaseHas('offices', [
+            'id' => $office->id,
+            'approval_status' => Office::APPROVAL_PENDING,
+        ]);
+
+        Notification::assertSentTo($admin, OfficePendingApproval::class);
+    }
+
+    /**
+     * @test
+     */
+    public function itCanDeleteOffices()
+    {
+        $user = User::factory()->createQuietly();
+        $office = Office::factory()->for($user)->create();
+
+        $this->actingAs($user);
+
+        $response = $this->deleteJson('/api/offices/'.$office->id);
+
+        $response->assertOk();
+
+        $this->assertSoftDeleted($office);
+    }
+
+    /**
+     * @test
+     */
+    public function itCannotDeleteAnOfficeThatHasReservations()
+    {
+        $user = User::factory()->createQuietly();
+        $office = Office::factory()->for($user)->create();
+
+        Reservation::factory(3)->for($office)->create();
+
+        $this->actingAs($user);
+
+        $response = $this->deleteJson('/api/offices/'.$office->id);
+
+        $response->assertUnprocessable();
+
+        $this->assertNotSoftDeleted($office);
+    }
+
+    /**
+     * @test
+     */
+    public function itListsOfficesIncludingHiddenAndUnApprovedIfFilteringForTheLoggedInUser(): void
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user);
+
+        Office::factory(3)->for($user)->create();
+
+        Office::factory()->for($user)->create(['hidden' => true]);
+        Office::factory()->for($user)->create(['approval_status' => Office::APPROVAL_PENDING]);
+
+        $response = $this->get('/api/offices?user_id='.$user->id);
+
+        $response->assertOk();
+        $response->assertJsonCount(5, 'data');
+    }
+
+    /**
+     * @test
+     */
+    public function itUpdatesTheFeaturedImageOfTheOffice()
+    {
+        $user = User::factory()->create();
+        $office = Office::factory()->for($user)->create();
+
+        $image = $office->images()->create([
+            'path' => 'image.jpg'
+        ]);
+
+        $this->actingAs($user);
+
+        $response = $this->putJson('/api/offices/'.$office->id, [
+            'featured_image_id' => $image->id,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('data.featured_image_id', $image->id);
+    }
+
+    /**
+     * @test
+     */
+    public function itDoesntUpdateFeaturedImageThatBelongsToAnotherOffice()
+    {
+        $user = User::factory()->create();
+        $office = Office::factory()->for($user)->create();
+        $office2 = Office::factory()->for($user)->create();
+
+        $image = $office2->images()->create([
+            'path' => 'image.jpg'
+        ]);
+
+        $this->actingAs($user);
+
+        $response = $this->putJson('/api/offices/'.$office->id, [
+            'featured_image_id' => $image->id,
+        ]);
+
+        $response->assertUnprocessable()->assertInvalid('featured_image_id');
     }
 }
